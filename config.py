@@ -1,0 +1,7 @@
+SAMPLE_RATE = 16000
+DURATION = 1  # segundos
+N_MELS = 128
+N_FFT = 512
+HOP_LENGTH = 256
+N_SAMPLES = SAMPLE_RATE * DURATION
+CLASES = ['Fabian', 'Santiago', 'Kevin']
