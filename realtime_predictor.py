@@ -1,21 +1,19 @@
-import sounddevice as sd
+import tkinter as tk
+from tkinter import messagebox
 import numpy as np
 import tensorflow as tf
+import sounddevice as sd
 import librosa
-from config import SAMPLE_RATE, DURATION, N_FFT, HOP_LENGTH, N_MELS, CLASES
+import threading
+
+from config import SAMPLE_RATE, DURATION, N_FFT, HOP_LENGTH, CLASES
 
 def grabar_audio():
-    print("🎙 Grabando audio de 1 segundo...")
     audio = sd.rec(int(DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
     sd.wait()
     return audio.flatten()
 
 def extraer_mfcc(audio):
-    if len(audio) < int(SAMPLE_RATE * DURATION):
-        audio = np.pad(audio, (0, int(SAMPLE_RATE * DURATION) - len(audio)))
-    else:
-        audio = audio[:int(SAMPLE_RATE * DURATION)]
-
     mfcc = librosa.feature.mfcc(
         y=audio,
         sr=SAMPLE_RATE,
@@ -23,29 +21,68 @@ def extraer_mfcc(audio):
         n_fft=N_FFT,
         hop_length=HOP_LENGTH
     )
-    return mfcc.T  # (63, 13)
+    return mfcc.T  # Forma (frames, 13)
 
 def preparar_entrada(mel_db):
-    mel_db = mel_db[np.newaxis, ..., np.newaxis]  # Forma: (1, alto, ancho, 1)
-    return mel_db.astype(np.float32)
+    return mel_db[np.newaxis, ..., np.newaxis].astype(np.float32)
 
 @tf.function(reduce_retracing=True)
 def predecir(modelo, entrada):
     return modelo(entrada, training=False)
 
-def main():
-    modelo = tf.keras.models.load_model("modelo_entrenado.h5")
-    print("✅ Modelo cargado. Presiona ENTER para predecir una grabación o Ctrl+C para salir.\n")
+# ───── Interfaz gráfica ─────
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Reconocimiento de voz: ¿Quién dijo 'Hola'?")
+        self.root.geometry("400x250")
 
-    while True:
-        input("Presiona ENTER para grabar...")
+        self.label_resultado = tk.Label(root, text="Presiona el botón para grabar", font=("Helvetica", 14))
+        self.label_resultado.pack(pady=20)
+
+        self.label_confianza = tk.Label(root, text="", font=("Helvetica", 12))
+        self.label_confianza.pack()
+
+        self.boton_grabar = tk.Button(root, text="🎙 Grabar", font=("Helvetica", 12), command=self.iniciar_prediccion)
+        self.boton_grabar.pack(pady=20)
+
+        self.modelo = tf.keras.models.load_model("modelo_entrenado.h5")
+
+    def iniciar_prediccion(self):
+        threading.Thread(target=self.procesar_audio).start()
+
+    def procesar_audio(self):
+        self.label_resultado.config(text="🎙 Grabando...")
         audio = grabar_audio()
-        mfcc = extraer_mfcc(audio)
-        entrada = preparar_entrada(mfcc)
+        mel_db = extraer_mfcc(audio)
 
-        pred = predecir(modelo, entrada).numpy()
-        clase_idx = np.argmax(pred)
+
+        # 🔧 Asegurar forma (63, 13)
+        if mel_db.shape[0] < 63:
+            mel_db = np.pad(mel_db, ((0, 63 - mel_db.shape[0]), (0, 0)))
+        elif mel_db.shape[0] > 63:
+            mel_db = mel_db[:63, :]
+
+        entrada = preparar_entrada(mel_db)
+        pred = predecir(self.modelo, entrada).numpy()
+        idx = np.argmax(pred)
         confianza = np.max(pred)
 
-        print(f"🔊 Predicción: {CLASES[clase_idx]} ({confianza*100:.2f}% de confianza)\n")
-        print(f"Forma de entrada para predicción: {entrada.shape}")
+        if confianza < 0.90:
+            self.label_resultado.config(text="❌ No se reconoció la palabra 'Hola'.")
+            self.label_confianza.config(text=f"Confianza: {confianza * 100:.2f}%")
+        else:
+            self.label_resultado.config(text=f"✅ {CLASES[idx]}")
+            self.label_confianza.config(text=f"Confianza: {confianza * 100:.2f}%")
+
+# ───── Main ─────
+def main():
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Saliendo del programa...")
